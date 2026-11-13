@@ -1,0 +1,2024 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 国际象棋 (3D International Chess)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Three.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- OrbitControls CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            user-select: none;
+            overflow: hidden;
+            background-color: #0b0f19;
+        }
+        /* Custom Glassmorphism Styling */
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .glass-button {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            transition: all 0.2s ease;
+        }
+        .glass-button:hover:not(:disabled) {
+            background: rgba(51, 65, 85, 0.85);
+            border-color: rgba(255, 255, 255, 0.25);
+            transform: translateY(-1px);
+        }
+        .glass-button:active:not(:disabled) {
+            transform: translateY(0);
+        }
+        /* Custom Scrollbar for Move History */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.5);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(51, 65, 85, 0.8);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(71, 85, 105, 1);
+        }
+        /* Pulse Animation for Check Warning */
+        @keyframes alert-pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.85; transform: scale(1.03); }
+        }
+        .pulse-alert {
+            animation: alert-pulse 1.5s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="w-screen h-screen text-slate-100 flex flex-col relative">
+
+    <!-- 3D Canvas Container -->
+    <div id="canvas-container" class="absolute inset-0 w-full h-full z-0 cursor-grab active:cursor-grabbing"></div>
+
+    <!-- Top HUD Bar -->
+    <header class="relative z-10 w-full px-4 py-3 flex items-center justify-between pointer-events-none">
+        <div class="flex items-center gap-3 pointer-events-auto">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-600 to-amber-400 flex items-center justify-center shadow-lg shadow-amber-900/40">
+                <i class="fa-solid fa-chess-king text-xl text-slate-950"></i>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold tracking-wide text-white flex items-center gap-2">
+                    3D 国际象棋 <span class="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">FIDE 规则</span>
+                </h1>
+                <p class="text-xs text-slate-400">大师级 3D 参数化建模 & 智能 AI</p>
+            </div>
+        </div>
+
+        <!-- Dynamic Game Status Indicator -->
+        <div id="status-badge" class="pointer-events-auto glass-panel px-5 py-2 rounded-full flex items-center gap-3 shadow-xl transition-all duration-300">
+            <span id="turn-dot" class="w-3.5 h-3.5 rounded-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]"></span>
+            <span id="status-text" class="text-sm font-semibold tracking-wide text-slate-200">白方回合</span>
+            <span id="ai-thinking" class="hidden text-xs text-amber-400 flex items-center gap-1.5 ml-1">
+                <i class="fa-solid fa-spinner animate-spin"></i> 思考中...
+            </span>
+        </div>
+
+        <!-- Top Right Controls -->
+        <div class="flex items-center gap-2 pointer-events-auto">
+            <button id="btn-sound" title="开关音效" class="glass-button w-10 h-10 rounded-xl flex items-center justify-center text-slate-300 hover:text-white">
+                <i class="fa-solid fa-volume-high text-base"></i>
+            </button>
+            <button id="btn-toggle-panel" title="切换侧边栏" class="glass-button w-10 h-10 rounded-xl flex items-center justify-center text-slate-300 hover:text-white md:hidden">
+                <i class="fa-solid fa-bars text-base"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content Area / Floating HUD -->
+    <main class="relative z-10 flex-1 w-full p-4 flex justify-between pointer-events-none overflow-hidden">
+        
+        <!-- Left Side Control Drawer / Panel -->
+        <aside id="side-panel" class="pointer-events-auto w-80 max-w-[calc(100vw-2rem)] glass-panel rounded-2xl p-4 flex flex-col gap-4 shadow-2xl transition-all duration-300 max-h-full overflow-y-auto">
+            
+            <!-- Game Mode & Settings -->
+            <div class="space-y-3">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">对局模式</span>
+                    <span class="text-xs text-amber-400 font-medium" id="mode-desc">人机对战 (白棋)</span>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <button id="mode-pve" class="glass-button py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 border-amber-500/50 bg-amber-500/20 text-amber-200">
+                        <i class="fa-solid fa-robot"></i> 人机对战
+                    </button>
+                    <button id="mode-pvp" class="glass-button py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 text-slate-300">
+                        <i class="fa-solid fa-user-group"></i> 双人同屏
+                    </button>
+                </div>
+
+                <!-- AI Settings (Visible in PvE) -->
+                <div id="ai-settings" class="space-y-2 pt-1">
+                    <div class="flex items-center justify-between text-xs">
+                        <span class="text-slate-400">AI 难度:</span>
+                        <div class="flex gap-1" id="ai-difficulty-group">
+                            <button data-level="1" class="px-2 py-1 rounded text-[11px] font-medium glass-button bg-amber-500/20 text-amber-300 border-amber-500/40">入门</button>
+                            <button data-level="2" class="px-2 py-1 rounded text-[11px] font-medium glass-button text-slate-300">进阶</button>
+                            <button data-level="3" class="px-2 py-1 rounded text-[11px] font-medium glass-button text-slate-300">大师</button>
+                        </div>
+                    </div>
+                    <div class="flex items-center justify-between text-xs">
+                        <span class="text-slate-400">玩家阵营:</span>
+                        <div class="flex gap-1">
+                            <button id="btn-side-white" class="px-2.5 py-1 rounded text-[11px] font-medium glass-button bg-amber-500/20 text-amber-300 border-amber-500/40">执白 (先手)</button>
+                            <button id="btn-side-black" class="px-2.5 py-1 rounded text-[11px] font-medium glass-button text-slate-300">执黑 (后手)</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <hr class="border-slate-800">
+
+            <!-- Board Themes -->
+            <div class="space-y-2">
+                <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">材质主题</span>
+                <div class="grid grid-cols-3 gap-2">
+                    <button data-theme="classic" class="theme-btn glass-button p-2 rounded-lg flex flex-col items-center gap-1 border-amber-500/50 bg-amber-500/10">
+                        <div class="w-full h-4 rounded bg-gradient-to-r from-[#e8dbca] to-[#3d2314] shadow-inner"></div>
+                        <span class="text-[10px] text-slate-200">胡桃木象牙</span>
+                    </button>
+                    <button data-theme="marble" class="theme-btn glass-button p-2 rounded-lg flex flex-col items-center gap-1 text-slate-400">
+                        <div class="w-full h-4 rounded bg-gradient-to-r from-[#f5f5f7] to-[#1e222a] shadow-inner"></div>
+                        <span class="text-[10px] text-slate-200">大理石黑曜</span>
+                    </button>
+                    <button data-theme="glass" class="theme-btn glass-button p-2 rounded-lg flex flex-col items-center gap-1 text-slate-400">
+                        <div class="w-full h-4 rounded bg-gradient-to-r from-[#8a9ba8] to-[#22262d] shadow-inner"></div>
+                        <span class="text-[10px] text-slate-200">磨砂金属</span>
+                    </button>
+                </div>
+            </div>
+
+            <hr class="border-slate-800">
+
+            <!-- Camera Presets -->
+            <div class="space-y-2">
+                <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">视角切换</span>
+                <div class="grid grid-cols-3 gap-2">
+                    <button id="cam-white" class="glass-button py-1.5 text-xs rounded-lg text-slate-300 flex items-center justify-center gap-1">
+                        <i class="fa-solid fa-square text-white text-[10px]"></i> 白方
+                    </button>
+                    <button id="cam-black" class="glass-button py-1.5 text-xs rounded-lg text-slate-300 flex items-center justify-center gap-1">
+                        <i class="fa-solid fa-square text-slate-800 text-[10px]"></i> 黑方
+                    </button>
+                    <button id="cam-top" class="glass-button py-1.5 text-xs rounded-lg text-slate-300 flex items-center justify-center gap-1">
+                        <i class="fa-solid fa-border-all text-[10px]"></i> 俯视
+                    </button>
+                </div>
+            </div>
+
+            <hr class="border-slate-800">
+
+            <!-- Action Buttons -->
+            <div class="grid grid-cols-3 gap-2">
+                <button id="btn-new-game" class="glass-button py-2 rounded-xl text-xs font-bold text-emerald-400 hover:bg-emerald-500/20 flex flex-col items-center gap-1">
+                    <i class="fa-solid fa-rotate-right text-sm"></i> 新对局
+                </button>
+                <button id="btn-undo" class="glass-button py-2 rounded-xl text-xs font-bold text-amber-400 hover:bg-amber-500/20 flex flex-col items-center gap-1">
+                    <i class="fa-solid fa-arrow-rotate-left text-sm"></i> 悔棋
+                </button>
+                <button id="btn-hint" class="glass-button py-2 rounded-xl text-xs font-bold text-cyan-400 hover:bg-cyan-500/20 flex flex-col items-center gap-1">
+                    <i class="fa-solid fa-lightbulb text-sm"></i> 走法提示
+                </button>
+            </div>
+
+            <!-- Material Advantage & Captured Pieces -->
+            <div class="glass-panel rounded-xl p-3 space-y-2 text-xs">
+                <div class="flex items-center justify-between text-slate-400">
+                    <span>被吃子力统计</span>
+                    <span id="material-advantage" class="font-mono font-bold text-emerald-400">+0</span>
+                </div>
+                <!-- Captured Icons Container -->
+                <div class="space-y-1">
+                    <div class="flex items-center gap-1 min-h-[22px] flex-wrap" id="captured-black-pieces" title="黑方被吃的子力"></div>
+                    <div class="flex items-center gap-1 min-h-[22px] flex-wrap" id="captured-white-pieces" title="白方被吃的子力"></div>
+                </div>
+            </div>
+
+            <!-- SAN Move History -->
+            <div class="flex-1 flex flex-col min-h-[140px] glass-panel rounded-xl p-3 overflow-hidden">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">对局记录 (SAN)</span>
+                    <i class="fa-solid fa-list-ol text-xs text-slate-500"></i>
+                </div>
+                <div id="move-history-list" class="flex-1 overflow-y-auto space-y-1 font-mono text-xs pr-1">
+                    <!-- Dynamic Move Rows -->
+                    <div class="text-slate-500 text-center py-4">暂无走法记录</div>
+                </div>
+            </div>
+
+        </aside>
+
+        <!-- Right Side Quick Info Floating Overlay -->
+        <div class="hidden lg:flex flex-col items-end gap-3 pointer-events-none">
+            <div class="glass-panel px-4 py-3 rounded-2xl text-right max-w-xs pointer-events-auto">
+                <h3 class="text-xs font-bold text-amber-400 uppercase tracking-wider mb-1">交互提示</h3>
+                <p class="text-xs text-slate-300 leading-relaxed">
+                    鼠标左键旋转视角，右键/平移拖拽，滚轮缩放。点击棋子查看可走位置。支持王车易位、过路兵及兵升变规则。
+                </p>
+            </div>
+        </div>
+    </main>
+
+    <!-- Pawn Promotion Modal -->
+    <div id="modal-promotion" class="fixed inset-0 z-50 hidden bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="glass-panel max-w-sm w-full rounded-2xl p-6 text-center space-y-6 shadow-2xl border border-amber-500/30">
+            <div>
+                <h2 class="text-xl font-bold text-white mb-1">兵升变 (Pawn Promotion)</h2>
+                <p class="text-xs text-slate-400">您的兵已到达底线，请选择升变的目标棋子：</p>
+            </div>
+            <div class="grid grid-cols-4 gap-3" id="promotion-options">
+                <button data-piece="q" class="glass-button p-4 rounded-xl flex flex-col items-center gap-2 hover:border-amber-400 group">
+                    <i class="fa-solid fa-chess-queen text-3xl text-amber-400 group-hover:scale-110 transition-transform"></i>
+                    <span class="text-xs font-bold text-slate-200">后 (Queen)</span>
+                </button>
+                <button data-piece="r" class="glass-button p-4 rounded-xl flex flex-col items-center gap-2 hover:border-amber-400 group">
+                    <i class="fa-solid fa-chess-rook text-3xl text-slate-300 group-hover:scale-110 transition-transform"></i>
+                    <span class="text-xs font-bold text-slate-200">车 (Rook)</span>
+                </button>
+                <button data-piece="b" class="glass-button p-4 rounded-xl flex flex-col items-center gap-2 hover:border-amber-400 group">
+                    <i class="fa-solid fa-chess-bishop text-3xl text-slate-300 group-hover:scale-110 transition-transform"></i>
+                    <span class="text-xs font-bold text-slate-200">象 (Bishop)</span>
+                </button>
+                <button data-piece="n" class="glass-button p-4 rounded-xl flex flex-col items-center gap-2 hover:border-amber-400 group">
+                    <i class="fa-solid fa-chess-knight text-3xl text-slate-300 group-hover:scale-110 transition-transform"></i>
+                    <span class="text-xs font-bold text-slate-200">马 (Knight)</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Game Over Modal -->
+    <div id="modal-gameover" class="fixed inset-0 z-50 hidden bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="glass-panel max-w-md w-full rounded-2xl p-8 text-center space-y-6 shadow-2xl border border-amber-500/40">
+            <div class="w-16 h-16 mx-auto rounded-full bg-gradient-to-tr from-amber-500 to-amber-300 flex items-center justify-center text-slate-950 text-3xl shadow-lg shadow-amber-500/30 pulse-alert">
+                <i class="fa-solid fa-trophy" id="gameover-icon"></i>
+            </div>
+            <div>
+                <h2 class="text-2xl font-bold text-white" id="gameover-title">白方获胜！</h2>
+                <p class="text-sm text-slate-300 mt-2" id="gameover-reason">将死！黑方已无路可走。</p>
+            </div>
+            <div class="pt-2 flex gap-3">
+                <button id="btn-restart-gameover" class="flex-1 py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold rounded-xl shadow-lg shadow-amber-500/20 text-sm transition-all">
+                    开始新对局
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN JAVASCRIPT LOGIC -->
+    <script>
+        /**
+         * ====================================================================
+         * 1. FIDE CHESS ENGINE (Strict Legal Rules, Move Gen, SAN, Minimax AI)
+         * ====================================================================
+         */
+        const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+        const RANKS = ['1', '2', '3', '4', '5', '6', '7', '8'];
+
+        // Piece Values for Material Evaluation
+        const PIECE_VALUES = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
+
+        // Positional Tables (PST) for AI
+        const PST_PAWN = [
+            0,  0,  0,  0,  0,  0,  0,  0,
+            50, 50, 50, 50, 50, 50, 50, 50,
+            10, 10, 20, 30, 30, 20, 10, 10,
+             5,  5, 10, 25, 25, 10,  5,  5,
+             0,  0,  0, 20, 20,  0,  0,  0,
+             5, -5,-10,  0,  0,-10, -5,  5,
+             5, 10, 10,-20,-20, 10, 10,  5,
+             0,  0,  0,  0,  0,  0,  0,  0
+        ];
+
+        const PST_KNIGHT = [
+            -50,-40,-30,-30,-30,-30,-40,-50,
+            -40,-20,  0,  0,  0,  0,-20,-40,
+            -30,  0, 10, 15, 15, 10,  0,-30,
+            -30,  5, 15, 20, 20, 15,  5,-30,
+            -30,  0, 15, 20, 20, 15,  0,-30,
+            -30,  5, 10, 15, 15, 10,  5,-30,
+            -40,-20,  0,  5,  5,  0,-20,-40,
+            -50,-40,-30,-30,-30,-30,-40,-50
+        ];
+
+        const PST_BISHOP = [
+            -20,-10,-10,-10,-10,-10,-10,-20,
+            -10,  0,  0,  0,  0,  0,  0,-10,
+            -10,  0,  5, 10, 10,  5,  0,-10,
+            -10,  5,  5, 10, 10,  5,  5,-10,
+            -10,  0, 10, 10, 10, 10,  0,-10,
+            -10, 10, 10, 10, 10, 10, 10,-10,
+            -10,  5,  0,  0,  0,  0,  5,-10,
+            -20,-10,-10,-10,-10,-10,-10,-20
+        ];
+
+        class ChessEngine {
+            constructor() {
+                this.reset();
+            }
+
+            reset() {
+                // 8x8 Board representation: null or { type, color, moved }
+                this.board = Array(64).fill(null);
+                this.turn = 'w';
+                this.castling = {
+                    w: { kingSide: true, queenSide: true },
+                    b: { kingSide: true, queenSide: true }
+                };
+                this.enPassantTarget = null; // Square index (x, y) or null
+                this.halfMoveClock = 0;
+                this.fullMoveNumber = 1;
+                this.moveHistory = [];
+                this.positionHistory = [];
+
+                this.setupInitialBoard();
+                this.recordPositionHash();
+            }
+
+            setupInitialBoard() {
+                const layout = ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'];
+                for (let x = 0; x < 8; x++) {
+                    // White major pieces rank 0 (1 in chess)
+                    this.board[x + 0 * 8] = { type: layout[x], color: 'w', moved: false };
+                    // White pawns rank 1 (2 in chess)
+                    this.board[x + 1 * 8] = { type: 'p', color: 'w', moved: false };
+
+                    // Black pawns rank 6 (7 in chess)
+                    this.board[x + 6 * 8] = { type: 'p', color: 'b', moved: false };
+                    // Black major pieces rank 7 (8 in chess)
+                    this.board[x + 7 * 8] = { type: layout[x], color: 'b', moved: false };
+                }
+            }
+
+            getPiece(x, y) {
+                if (x < 0 || x > 7 || y < 0 || y > 7) return null;
+                return this.board[x + y * 8];
+            }
+
+            setPiece(x, y, piece) {
+                this.board[x + y * 8] = piece;
+            }
+
+            // Clone state for move simulation
+            clone() {
+                const copy = new ChessEngine();
+                copy.board = this.board.map(p => p ? { ...p } : null);
+                copy.turn = this.turn;
+                copy.castling = {
+                    w: { ...this.castling.w },
+                    b: { ...this.castling.b }
+                };
+                copy.enPassantTarget = this.enPassantTarget ? { ...this.enPassantTarget } : null;
+                copy.halfMoveClock = this.halfMoveClock;
+                copy.fullMoveNumber = this.fullMoveNumber;
+                return copy;
+            }
+
+            // Generate pseudo-legal moves for piece at (x, y)
+            getPseudoLegalMoves(x, y, ignoreCastlingCheck = false) {
+                const piece = this.getPiece(x, y);
+                if (!piece || piece.color !== this.turn) return [];
+
+                const moves = [];
+                const color = piece.color;
+                const enemyColor = color === 'w' ? 'b' : 'w';
+                const forwardDir = color === 'w' ? 1 : -1;
+
+                switch (piece.type) {
+                    case 'p': {
+                        // Forward 1
+                        const f1Y = y + forwardDir;
+                        if (f1Y >= 0 && f1Y <= 7 && !this.getPiece(x, f1Y)) {
+                            // Check promotion
+                            if (f1Y === 0 || f1Y === 7) {
+                                ['q', 'r', 'b', 'n'].forEach(promo => {
+                                    moves.push({ from: { x, y }, to: { x, y: f1Y }, piece, promotion: promo });
+                                });
+                            } else {
+                                moves.push({ from: { x, y }, to: { x, y: f1Y }, piece });
+                            }
+
+                            // Forward 2 from initial rank
+                            const initialRank = color === 'w' ? 1 : 6;
+                            const f2Y = y + forwardDir * 2;
+                            if (y === initialRank && !this.getPiece(x, f2Y)) {
+                                moves.push({ from: { x, y }, to: { x, y: f2Y }, piece, isPawnTwoStep: true });
+                            }
+                        }
+
+                        // Diagonal Captures (including En Passant)
+                        [-1, 1].forEach(dx => {
+                            const targetX = x + dx;
+                            const targetY = y + forwardDir;
+                            if (targetX >= 0 && targetX <= 7 && targetY >= 0 && targetY <= 7) {
+                                const targetPiece = this.getPiece(targetX, targetY);
+                                if (targetPiece && targetPiece.color === enemyColor) {
+                                    if (targetY === 0 || targetY === 7) {
+                                        ['q', 'r', 'b', 'n'].forEach(promo => {
+                                            moves.push({ from: { x, y }, to: { x: targetX, y: targetY }, piece, captured: targetPiece, promotion: promo });
+                                        });
+                                    } else {
+                                        moves.push({ from: { x, y }, to: { x: targetX, y: targetY }, piece, captured: targetPiece });
+                                    }
+                                } else if (this.enPassantTarget && this.enPassantTarget.x === targetX && this.enPassantTarget.y === targetY) {
+                                    const epCapturedPawn = this.getPiece(targetX, y);
+                                    moves.push({ from: { x, y }, to: { x: targetX, y: targetY }, piece, captured: epCapturedPawn, isEnPassant: true });
+                                }
+                            }
+                        });
+                        break;
+                    }
+
+                    case 'n': {
+                        const knightOffsets = [
+                            [-2, -1], [-2, 1], [-1, -2], [-1, 2],
+                            [1, -2], [1, 2], [2, -1], [2, 1]
+                        ];
+                        knightOffsets.forEach(([dx, dy]) => {
+                            const tx = x + dx, ty = y + dy;
+                            if (tx >= 0 && tx <= 7 && ty >= 0 && ty <= 7) {
+                                const target = this.getPiece(tx, ty);
+                                if (!target || target.color === enemyColor) {
+                                    moves.push({ from: { x, y }, to: { x: tx, y: ty }, piece, captured: target });
+                                }
+                            }
+                        });
+                        break;
+                    }
+
+                    case 'b':
+                        this.addRayMoves(moves, x, y, [[-1, -1], [-1, 1], [1, -1], [1, 1]], piece);
+                        break;
+
+                    case 'r':
+                        this.addRayMoves(moves, x, y, [[-1, 0], [1, 0], [0, -1], [0, 1]], piece);
+                        break;
+
+                    case 'q':
+                        this.addRayMoves(moves, x, y, [[-1, -1], [-1, 1], [1, -1], [1, 1], [-1, 0], [1, 0], [0, -1], [0, 1]], piece);
+                        break;
+
+                    case 'k': {
+                        const kOffsets = [
+                            [-1, -1], [-1, 0], [-1, 1],
+                            [0, -1],           [0, 1],
+                            [1, -1],  [1, 0],  [1, 1]
+                        ];
+                        kOffsets.forEach(([dx, dy]) => {
+                            const tx = x + dx, ty = y + dy;
+                            if (tx >= 0 && tx <= 7 && ty >= 0 && ty <= 7) {
+                                const target = this.getPiece(tx, ty);
+                                if (!target || target.color === enemyColor) {
+                                    moves.push({ from: { x, y }, to: { x: tx, y: ty }, piece, captured: target });
+                                }
+                            }
+                        });
+
+                        // Castling (O-O and O-O-O)
+                        if (!ignoreCastlingCheck && !this.isInCheck(color)) {
+                            const rank = color === 'w' ? 0 : 7;
+                            if (x === 4 && y === rank) {
+                                // King-Side O-O
+                                if (this.castling[color].kingSide) {
+                                    if (!this.getPiece(5, rank) && !this.getPiece(6, rank)) {
+                                        if (!this.isSquareAttacked(5, rank, enemyColor) && !this.isSquareAttacked(6, rank, enemyColor)) {
+                                            moves.push({ from: { x, y }, to: { x: 6, y: rank }, piece, isCastling: 'kingSide' });
+                                        }
+                                    }
+                                }
+                                // Queen-Side O-O-O
+                                if (this.castling[color].queenSide) {
+                                    if (!this.getPiece(1, rank) && !this.getPiece(2, rank) && !this.getPiece(3, rank)) {
+                                        if (!this.isSquareAttacked(2, rank, enemyColor) && !this.isSquareAttacked(3, rank, enemyColor)) {
+                                            moves.push({ from: { x, y }, to: { x: 2, y: rank }, piece, isCastling: 'queenSide' });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+
+                return moves;
+            }
+
+            addRayMoves(moves, x, y, directions, piece) {
+                const enemyColor = piece.color === 'w' ? 'b' : 'w';
+                directions.forEach(([dx, dy]) => {
+                    let tx = x + dx, ty = y + dy;
+                    while (tx >= 0 && tx <= 7 && ty >= 0 && ty <= 7) {
+                        const target = this.getPiece(tx, ty);
+                        if (!target) {
+                            moves.push({ from: { x, y }, to: { x: tx, y: ty }, piece });
+                        } else {
+                            if (target.color === enemyColor) {
+                                moves.push({ from: { x, y }, to: { x: tx, y: ty }, piece, captured: target });
+                            }
+                            break;
+                        }
+                        tx += dx;
+                        ty += dy;
+                    }
+                });
+            }
+
+            // Check if a square is attacked by enemy
+            isSquareAttacked(targetX, targetY, attackerColor) {
+                const forwardDir = attackerColor === 'w' ? 1 : -1;
+                // Pawn attacks
+                const pawnAttacks = [[-1, -forwardDir], [1, -forwardDir]];
+                for (let [dx, dy] of pawnAttacks) {
+                    const px = targetX + dx, py = targetY + dy;
+                    const p = this.getPiece(px, py);
+                    if (p && p.color === attackerColor && p.type === 'p') return true;
+                }
+
+                // Knight attacks
+                const knightOffsets = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]];
+                for (let [dx, dy] of knightOffsets) {
+                    const k = this.getPiece(targetX + dx, targetY + dy);
+                    if (k && k.color === attackerColor && k.type === 'n') return true;
+                }
+
+                // King attacks
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        if (dx === 0 && dy === 0) continue;
+                        const k = this.getPiece(targetX + dx, targetY + dy);
+                        if (k && k.color === attackerColor && k.type === 'k') return true;
+                    }
+                }
+
+                // Straight rays (Rook/Queen)
+                const straight = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+                for (let [dx, dy] of straight) {
+                    let tx = targetX + dx, ty = targetY + dy;
+                    while (tx >= 0 && tx <= 7 && ty >= 0 && ty <= 7) {
+                        const piece = this.getPiece(tx, ty);
+                        if (piece) {
+                            if (piece.color === attackerColor && (piece.type === 'r' || piece.type === 'q')) return true;
+                            break;
+                        }
+                        tx += dx; ty += dy;
+                    }
+                }
+
+                // Diagonal rays (Bishop/Queen)
+                const diagonal = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+                for (let [dx, dy] of diagonal) {
+                    let tx = targetX + dx, ty = targetY + dy;
+                    while (tx >= 0 && tx <= 7 && ty >= 0 && ty <= 7) {
+                        const piece = this.getPiece(tx, ty);
+                        if (piece) {
+                            if (piece.color === attackerColor && (piece.type === 'b' || piece.type === 'q')) return true;
+                            break;
+                        }
+                        tx += dx; ty += dy;
+                    }
+                }
+
+                return false;
+            }
+
+            // Find King position
+            findKing(color) {
+                for (let i = 0; i < 64; i++) {
+                    const p = this.board[i];
+                    if (p && p.color === color && p.type === 'k') {
+                        return { x: i % 8, y: Math.floor(i / 8) };
+                    }
+                }
+                return null;
+            }
+
+            isInCheck(color) {
+                const kingPos = this.findKing(color);
+                if (!kingPos) return false;
+                const enemyColor = color === 'w' ? 'b' : 'w';
+                return this.isSquareAttacked(kingPos.x, kingPos.y, enemyColor);
+            }
+
+            // Get strict legal moves (filtering moves leaving king in check)
+            getLegalMoves(x, y) {
+                const pseudoMoves = this.getPseudoLegalMoves(x, y);
+                return pseudoMoves.filter(move => {
+                    const testEngine = this.clone();
+                    testEngine.executeMoveInternal(move);
+                    return !testEngine.isInCheck(this.turn);
+                });
+            }
+
+            getAllLegalMoves(color = this.turn) {
+                const legalMoves = [];
+                for (let y = 0; y < 8; y++) {
+                    for (let x = 0; x < 8; x++) {
+                        const piece = this.getPiece(x, y);
+                        if (piece && piece.color === color) {
+                            legalMoves.push(...this.getLegalMoves(x, y));
+                        }
+                    }
+                }
+                return legalMoves;
+            }
+
+            // Execute move state updates internally
+            executeMoveInternal(move) {
+                const { from, to, piece, promotion, isCastling, isEnPassant, isPawnTwoStep } = move;
+
+                // Move primary piece
+                this.setPiece(from.x, from.y, null);
+                const updatedPiece = { ...piece, moved: true };
+                if (promotion) updatedPiece.type = promotion;
+                this.setPiece(to.x, to.y, updatedPiece);
+
+                // Handle Castling Rook move
+                if (isCastling) {
+                    const rank = piece.color === 'w' ? 0 : 7;
+                    if (isCastling === 'kingSide') {
+                        const rook = this.getPiece(7, rank);
+                        this.setPiece(7, rank, null);
+                        this.setPiece(5, rank, { ...rook, moved: true });
+                    } else if (isCastling === 'queenSide') {
+                        const rook = this.getPiece(0, rank);
+                        this.setPiece(0, rank, null);
+                        this.setPiece(3, rank, { ...rook, moved: true });
+                    }
+                }
+
+                // Handle En Passant capture
+                if (isEnPassant) {
+                    this.setPiece(to.x, from.y, null);
+                }
+
+                // Update En Passant Target
+                if (isPawnTwoStep) {
+                    this.enPassantTarget = { x: from.x, y: (from.y + to.y) / 2 };
+                } else {
+                    this.enPassantTarget = null;
+                }
+
+                // Update Castling Rights
+                if (piece.type === 'k') {
+                    this.castling[piece.color].kingSide = false;
+                    this.castling[piece.color].queenSide = false;
+                }
+                if (piece.type === 'r') {
+                    if (from.x === 0) this.castling[piece.color].queenSide = false;
+                    if (from.x === 7) this.castling[piece.color].kingSide = false;
+                }
+
+                // Half-move clock (reset on pawn move or capture)
+                if (piece.type === 'p' || move.captured) {
+                    this.halfMoveClock = 0;
+                } else {
+                    this.halfMoveClock++;
+                }
+
+                if (this.turn === 'b') this.fullMoveNumber++;
+                this.turn = this.turn === 'w' ? 'b' : 'w';
+            }
+
+            // Public method to make move with SAN logging and endgame checks
+            makeMove(move) {
+                const san = this.generateSAN(move);
+                move.san = san;
+
+                this.executeMoveInternal(move);
+                this.moveHistory.push(move);
+                this.recordPositionHash();
+
+                const enemyColor = this.turn;
+                const legalMoves = this.getAllLegalMoves(enemyColor);
+                const inCheck = this.isInCheck(enemyColor);
+
+                let gameState = 'active';
+                if (legalMoves.length === 0) {
+                    if (inCheck) {
+                        gameState = 'checkmate';
+                        move.san += '#';
+                    } else {
+                        gameState = 'stalemate';
+                    }
+                } else if (inCheck) {
+                    move.san += '+';
+                } else if (this.isInsufficientMaterial()) {
+                    gameState = 'insufficient';
+                } else if (this.halfMoveClock >= 100) {
+                    gameState = '50move';
+                } else if (this.isThreefoldRepetition()) {
+                    gameState = 'threefold';
+                }
+
+                return { gameState, san: move.san };
+            }
+
+            undoMove() {
+                if (this.moveHistory.length === 0) return false;
+                this.moveHistory.pop();
+                this.positionHistory.pop();
+
+                // Rebuild engine state from initial by replaying
+                const movesToReplay = [...this.moveHistory];
+                this.reset();
+                this.positionHistory = [];
+                this.moveHistory = [];
+                movesToReplay.forEach(m => this.makeMove(m));
+                return true;
+            }
+
+            // Generate Standard Algebraic Notation (SAN)
+            generateSAN(move) {
+                if (move.isCastling === 'kingSide') return 'O-O';
+                if (move.isCastling === 'queenSide') return 'O-O-O';
+
+                const pieceChar = move.piece.type.toUpperCase();
+                let san = move.piece.type === 'p' ? '' : pieceChar;
+
+                // Disambiguation for identical pieces targeting same square
+                if (move.piece.type !== 'p') {
+                    const legalMoves = this.getAllLegalMoves(move.piece.color);
+                    const duplicates = legalMoves.filter(m => 
+                        m.piece.type === move.piece.type &&
+                        (m.from.x !== move.from.x || m.from.y !== move.from.y) &&
+                        m.to.x === move.to.x && m.to.y === move.to.y
+                    );
+
+                    if (duplicates.length > 0) {
+                        const sameFile = duplicates.some(m => m.from.x === move.from.x);
+                        const sameRank = duplicates.some(m => m.from.y === move.from.y);
+                        if (!sameFile) {
+                            san += FILES[move.from.x];
+                        } else if (!sameRank) {
+                            san += RANKS[move.from.y];
+                        } else {
+                            san += FILES[move.from.x] + RANKS[move.from.y];
+                        }
+                    }
+                } else if (move.captured) {
+                    san += FILES[move.from.x];
+                }
+
+                if (move.captured) san += 'x';
+                san += FILES[move.to.x] + RANKS[move.to.y];
+
+                if (move.promotion) {
+                    san += '=' + move.promotion.toUpperCase();
+                }
+
+                return san;
+            }
+
+            // Position Hash for 3-fold repetition
+            recordPositionHash() {
+                let hash = `${this.turn}|${JSON.stringify(this.castling)}|${this.enPassantTarget ? `${this.enPassantTarget.x},${this.enPassantTarget.y}` : '-'}|`;
+                for (let i = 0; i < 64; i++) {
+                    const p = this.board[i];
+                    hash += p ? `${p.color}${p.type}` : '.';
+                }
+                this.positionHistory.push(hash);
+            }
+
+            isThreefoldRepetition() {
+                const current = this.positionHistory[this.positionHistory.length - 1];
+                const count = this.positionHistory.filter(h => h === current).length;
+                return count >= 3;
+            }
+
+            isInsufficientMaterial() {
+                const pieces = this.board.filter(p => p !== null);
+                if (pieces.length <= 2) return true; // K vs K
+                if (pieces.length === 3) {
+                    // K+B vs K or K+N vs K
+                    const nonKing = pieces.find(p => p.type !== 'k');
+                    if (nonKing && (nonKing.type === 'b' || nonKing.type === 'n')) return true;
+                }
+                return false;
+            }
+
+            // Material Difference & Captured Pieces list
+            getCapturedPieces() {
+                const initial = { w: { p: 8, r: 2, n: 2, b: 2, q: 1 }, b: { p: 8, r: 2, n: 2, b: 2, q: 1 } };
+                const current = { w: { p: 0, r: 0, n: 0, b: 0, q: 0 }, b: { p: 0, r: 0, n: 0, b: 0, q: 0 } };
+
+                this.board.forEach(p => {
+                    if (p && p.type !== 'k') {
+                        current[p.color][p.type]++;
+                    }
+                });
+
+                const capturedByWhite = []; // Black pieces captured
+                const capturedByBlack = []; // White pieces captured
+
+                ['p', 'n', 'b', 'r', 'q'].forEach(type => {
+                    const blackDiff = initial.b[type] - current.b[type];
+                    for (let i = 0; i < blackDiff; i++) capturedByWhite.push(type);
+
+                    const whiteDiff = initial.w[type] - current.w[type];
+                    for (let i = 0; i < whiteDiff; i++) capturedByBlack.push(type);
+                });
+
+                let whiteScore = 0, blackScore = 0;
+                this.board.forEach(p => {
+                    if (p) {
+                        if (p.color === 'w') whiteScore += PIECE_VALUES[p.type];
+                        else blackScore += PIECE_VALUES[p.type];
+                    }
+                });
+
+                const scoreDiff = (whiteScore - blackScore) / 100;
+                return { capturedByWhite, capturedByBlack, scoreDiff };
+            }
+
+            // Minimax Evaluation Function
+            evaluateBoard() {
+                let totalEval = 0;
+                for (let y = 0; y < 8; y++) {
+                    for (let x = 0; x < 8; x++) {
+                        const p = this.getPiece(x, y);
+                        if (p) {
+                            const val = PIECE_VALUES[p.type];
+                            let pst = 0;
+                            const idx = p.color === 'w' ? (7 - y) * 8 + x : y * 8 + x;
+                            if (p.type === 'p') pst = PST_PAWN[idx];
+                            else if (p.type === 'n') pst = PST_KNIGHT[idx];
+                            else if (p.type === 'b') pst = PST_BISHOP[idx];
+
+                            const score = val + pst;
+                            totalEval += p.color === 'w' ? score : -score;
+                        }
+                    }
+                }
+                return totalEval;
+            }
+
+            // Minimax with Alpha-Beta Pruning for AI
+            getBestMoveAI(depth = 2) {
+                const color = this.turn;
+                const allMoves = this.getAllLegalMoves(color);
+                if (allMoves.length === 0) return null;
+
+                // Move Ordering: Prioritize captures
+                allMoves.sort((a, b) => (b.captured ? 10 : 0) - (a.captured ? 10 : 0));
+
+                let bestMove = allMoves[Math.floor(Math.random() * allMoves.length)];
+                let bestEval = color === 'w' ? -Infinity : Infinity;
+
+                for (let move of allMoves) {
+                    const simEngine = this.clone();
+                    simEngine.makeMove(move);
+                    const evalScore = simEngine.minimax(depth - 1, -Infinity, Infinity, color !== 'w');
+                    
+                    if (color === 'w') {
+                        if (evalScore > bestEval) {
+                            bestEval = evalScore;
+                            bestMove = move;
+                        }
+                    } else {
+                        if (evalScore < bestEval) {
+                            bestEval = evalScore;
+                            bestMove = move;
+                        }
+                    }
+                }
+
+                return bestMove;
+            }
+
+            minimax(depth, alpha, beta, isMaximizing) {
+                if (depth === 0) return this.evaluateBoard();
+
+                const moves = this.getAllLegalMoves();
+                if (moves.length === 0) {
+                    if (this.isInCheck(this.turn)) return isMaximizing ? -99999 : 99999;
+                    return 0; // Stalemate
+                }
+
+                if (isMaximizing) {
+                    let maxEval = -Infinity;
+                    for (let move of moves) {
+                        const sim = this.clone();
+                        sim.makeMove(move);
+                        const evalScore = sim.minimax(depth - 1, alpha, beta, false);
+                        maxEval = Math.max(maxEval, evalScore);
+                        alpha = Math.max(alpha, evalScore);
+                        if (beta <= alpha) break;
+                    }
+                    return maxEval;
+                } else {
+                    let minEval = Infinity;
+                    for (let move of moves) {
+                        const sim = this.clone();
+                        sim.makeMove(move);
+                        const evalScore = sim.minimax(depth - 1, alpha, beta, true);
+                        minEval = Math.min(minEval, evalScore);
+                        beta = Math.min(beta, evalScore);
+                        if (beta <= alpha) break;
+                    }
+                    return minEval;
+                }
+            }
+        }
+
+        /**
+         * ====================================================================
+         * 2. PROCEDURAL 3D PIECES & THREE.JS RENDERER (Chess3D)
+         * ====================================================================
+         */
+        const THEMES = {
+            classic: {
+                name: "胡桃木与象牙",
+                lightSquare: 0xe8dbca, darkSquare: 0x3d2314, border: 0x2a150c,
+                whitePiece: 0xf0e6d2, blackPiece: 0x1a1a1a,
+                roughness: 0.3, metalness: 0.05
+            },
+            marble: {
+                name: "皇家大理石与黑曜石",
+                lightSquare: 0xf5f5f7, darkSquare: 0x1e222a, border: 0xd4af37,
+                whitePiece: 0xffffff, blackPiece: 0x111318,
+                roughness: 0.15, metalness: 0.2
+            },
+            glass: {
+                name: "现代磨砂玻璃与金属",
+                lightSquare: 0x8a9ba8, darkSquare: 0x22262d, border: 0x475569,
+                whitePiece: 0xd9e1e8, blackPiece: 0x2a303c,
+                roughness: 0.25, metalness: 0.85
+            }
+        };
+
+        class Chess3D {
+            constructor(containerEl) {
+                this.container = containerEl;
+                this.pieceMeshes = new Map(); // Key: squareIndex, Value: Mesh
+                this.highlightMeshes = [];
+                this.lastMoveHighlights = [];
+                this.checkHighlightMesh = null;
+                this.currentTheme = THEMES.classic;
+
+                this.initScene();
+                this.initMaterials();
+                this.createBoard();
+                this.setupLights();
+                this.setupRaycaster();
+                this.animate();
+
+                window.addEventListener('resize', () => this.onWindowResize());
+            }
+
+            initScene() {
+                this.scene = new THREE.Scene();
+                this.scene.background = new THREE.Color(0x0b0f19);
+
+                this.camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+                this.camera.position.set(0, 9, 8.5);
+
+                this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                this.renderer.shadowMap.enabled = true;
+                this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                this.container.appendChild(this.renderer.domElement);
+
+                this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
+                this.controls.enableDamping = true;
+                this.controls.dampingFactor = 0.05;
+                this.controls.maxPolarAngle = Math.PI / 2 - 0.05; // Don't go below table
+                this.controls.minDistance = 4;
+                this.controls.maxDistance = 22;
+                this.controls.target.set(0, 0, 0);
+            }
+
+            initMaterials() {
+                this.materials = {
+                    lightSquare: new THREE.MeshStandardMaterial({ roughness: this.currentTheme.roughness, metalness: this.currentTheme.metalness }),
+                    darkSquare: new THREE.MeshStandardMaterial({ roughness: this.currentTheme.roughness, metalness: this.currentTheme.metalness }),
+                    border: new THREE.MeshStandardMaterial({ roughness: 0.4, metalness: 0.2 }),
+                    whitePiece: new THREE.MeshStandardMaterial({ roughness: this.currentTheme.roughness, metalness: this.currentTheme.metalness }),
+                    blackPiece: new THREE.MeshStandardMaterial({ roughness: this.currentTheme.roughness + 0.05, metalness: this.currentTheme.metalness + 0.1 }),
+                    // Selection & Move Indicators
+                    selectRing: new THREE.MeshBasicMaterial({ color: 0xf59e0b, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }),
+                    legalMoveDot: new THREE.MeshBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.85 }),
+                    captureRing: new THREE.MeshBasicMaterial({ color: 0xef4444, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }),
+                    lastMoveTile: new THREE.MeshBasicMaterial({ color: 0xfacc15, transparent: true, opacity: 0.35 }),
+                    checkTile: new THREE.MeshBasicMaterial({ color: 0xd97706, transparent: true, opacity: 0.6 })
+                };
+                this.updateThemeMaterials();
+            }
+
+            updateThemeMaterials() {
+                const t = this.currentTheme;
+                this.materials.lightSquare.color.setHex(t.lightSquare);
+                this.materials.darkSquare.color.setHex(t.darkSquare);
+                this.materials.border.color.setHex(t.border);
+                this.materials.whitePiece.color.setHex(t.whitePiece);
+                this.materials.blackPiece.color.setHex(t.blackPiece);
+
+                this.materials.lightSquare.roughness = t.roughness;
+                this.materials.darkSquare.roughness = t.roughness;
+                this.materials.whitePiece.roughness = t.roughness;
+                this.materials.blackPiece.roughness = t.roughness;
+            }
+
+            setTheme(themeKey) {
+                if (THEMES[themeKey]) {
+                    this.currentTheme = THEMES[themeKey];
+                    this.updateThemeMaterials();
+                }
+            }
+
+            setupLights() {
+                // Key Light (Warm)
+                const keyLight = new THREE.DirectionalLight(0xfff5e6, 1.4);
+                keyLight.position.set(6, 12, 8);
+                keyLight.castShadow = true;
+                keyLight.shadow.mapSize.width = 2048;
+                keyLight.shadow.mapSize.height = 2048;
+                keyLight.shadow.camera.near = 0.5;
+                keyLight.shadow.camera.far = 25;
+                keyLight.shadow.camera.left = -6;
+                keyLight.shadow.camera.right = 6;
+                keyLight.shadow.camera.top = 6;
+                keyLight.shadow.camera.bottom = -6;
+                keyLight.shadow.bias = -0.0005;
+                this.scene.add(keyLight);
+
+                // Fill Light (Cool blue)
+                const fillLight = new THREE.DirectionalLight(0x88bbff, 0.5);
+                fillLight.position.set(-8, 8, -6);
+                this.scene.add(fillLight);
+
+                // Rim Light
+                const rimLight = new THREE.PointLight(0xffd1a4, 0.6, 20);
+                rimLight.position.set(0, 4, -8);
+                this.scene.add(rimLight);
+
+                // Ambient Light
+                const ambient = new THREE.AmbientLight(0xffffff, 0.45);
+                this.scene.add(ambient);
+            }
+
+            createBoard() {
+                this.boardGroup = new THREE.Group();
+
+                // 8x8 Board Tiles
+                this.squareMeshes = [];
+                for (let y = 0; y < 8; y++) {
+                    for (let x = 0; x < 8; x++) {
+                        const isLight = (x + y) % 2 === 1;
+                        const geom = new THREE.BoxGeometry(1, 0.2, 1);
+                        const mat = isLight ? this.materials.lightSquare : this.materials.darkSquare;
+                        const tile = new THREE.Mesh(geom, mat);
+
+                        tile.position.set(x - 3.5, -0.1, 3.5 - y);
+                        tile.receiveShadow = true;
+                        tile.userData = { squareX: x, squareY: y, squareIdx: x + y * 8 };
+                        this.boardGroup.add(tile);
+                        this.squareMeshes.push(tile);
+                    }
+                }
+
+                // Outer Chamfered Wooden Frame
+                const frameGeom = new THREE.BoxGeometry(9.4, 0.35, 9.4);
+                const frameMesh = new THREE.Mesh(frameGeom, this.materials.border);
+                frameMesh.position.set(0, -0.25, 0);
+                frameMesh.receiveShadow = true;
+                this.boardGroup.add(frameMesh);
+
+                // Add File/Rank Labels along Board Borders (Canvas Textures)
+                this.addBoardLabels();
+
+                this.scene.add(this.boardGroup);
+            }
+
+            addBoardLabels() {
+                const createLabelCanvas = (text) => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 64; canvas.height = 64;
+                    const ctx = canvas.getContext('2d');
+                    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+                    ctx.font = 'Bold 32px Inter, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(text, 32, 32);
+                    const texture = new THREE.CanvasTexture(canvas);
+                    return new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+                };
+
+                const labelGeom = new THREE.PlaneGeometry(0.6, 0.6);
+
+                // Files (a-h)
+                FILES.forEach((file, x) => {
+                    const mat = createLabelCanvas(file);
+                    const labelBottom = new THREE.Mesh(labelGeom, mat);
+                    labelBottom.position.set(x - 3.5, 0.01, 4.3);
+                    labelBottom.rotation.x = -Math.PI / 2;
+                    this.boardGroup.add(labelBottom);
+
+                    const labelTop = new THREE.Mesh(labelGeom, mat);
+                    labelTop.position.set(x - 3.5, 0.01, -4.3);
+                    labelTop.rotation.x = -Math.PI / 2;
+                    labelTop.rotation.z = Math.PI;
+                    this.boardGroup.add(labelTop);
+                });
+
+                // Ranks (1-8)
+                RANKS.forEach((rank, y) => {
+                    const mat = createLabelCanvas(rank);
+                    const labelLeft = new THREE.Mesh(labelGeom, mat);
+                    labelLeft.position.set(-4.3, 0.01, 3.5 - y);
+                    labelLeft.rotation.x = -Math.PI / 2;
+                    this.boardGroup.add(labelLeft);
+
+                    const labelRight = new THREE.Mesh(labelGeom, mat);
+                    labelRight.position.set(4.3, 0.01, 3.5 - y);
+                    labelRight.rotation.x = -Math.PI / 2;
+                    this.boardGroup.add(labelRight);
+                });
+            }
+
+            /**
+             * PROCEDURAL STAUNTON 3D PIECE GENERATOR
+             * Uses THREE.LatheGeometry + Custom Extruded & Sculpted Details
+             */
+            createPieceGeometry(type) {
+                switch (type) {
+                    case 'p': { // Pawn
+                        const points = [
+                            new THREE.Vector2(0, 0),
+                            new THREE.Vector2(0.35, 0),
+                            new THREE.Vector2(0.35, 0.06),
+                            new THREE.Vector2(0.28, 0.12),
+                            new THREE.Vector2(0.20, 0.38),
+                            new THREE.Vector2(0.22, 0.44),
+                            new THREE.Vector2(0.16, 0.60),
+                            new THREE.Vector2(0.20, 0.64),
+                            new THREE.Vector2(0.12, 0.70),
+                            new THREE.Vector2(0, 0.70)
+                        ];
+                        const lathe = new THREE.LatheGeometry(points, 24);
+                        const head = new THREE.SphereGeometry(0.20, 20, 20);
+                        head.translate(0, 0.82, 0);
+
+                        const group = new THREE.Group();
+                        group.add(new THREE.Mesh(lathe), new THREE.Mesh(head));
+                        return group;
+                    }
+
+                    case 'r': { // Rook
+                        const points = [
+                            new THREE.Vector2(0, 0),
+                            new THREE.Vector2(0.38, 0),
+                            new THREE.Vector2(0.38, 0.08),
+                            new THREE.Vector2(0.30, 0.14),
+                            new THREE.Vector2(0.26, 0.70),
+                            new THREE.Vector2(0.32, 0.78),
+                            new THREE.Vector2(0.32, 1.05),
+                            new THREE.Vector2(0.24, 1.05),
+                            new THREE.Vector2(0.24, 0.90),
+                            new THREE.Vector2(0, 0.90)
+                        ];
+                        const baseLathe = new THREE.LatheGeometry(points, 24);
+                        const group = new THREE.Group();
+                        group.add(new THREE.Mesh(baseLathe));
+
+                        // Add Crenellation Teeth on Top Rim
+                        for (let i = 0; i < 4; i++) {
+                            const tooth = new THREE.BoxGeometry(0.12, 0.16, 0.12);
+                            const angle = (i * Math.PI) / 2;
+                            tooth.translate(0.26 * Math.cos(angle), 1.10, 0.26 * Math.sin(angle));
+                            group.add(new THREE.Mesh(tooth));
+                        }
+                        return group;
+                    }
+
+                    case 'n': { // Knight (Horse head extruded)
+                        const points = [
+                            new THREE.Vector2(0, 0),
+                            new THREE.Vector2(0.38, 0),
+                            new THREE.Vector2(0.38, 0.08),
+                            new THREE.Vector2(0.30, 0.14),
+                            new THREE.Vector2(0.25, 0.30),
+                            new THREE.Vector2(0, 0.30)
+                        ];
+                        const baseLathe = new THREE.LatheGeometry(points, 24);
+                        const group = new THREE.Group();
+                        group.add(new THREE.Mesh(baseLathe));
+
+                        // Extruded Horse Head Profile
+                        const shape = new THREE.Shape();
+                        shape.moveTo(0, 0.3);
+                        shape.lineTo(0.2, 0.3);
+                        shape.quadraticCurveTo(0.32, 0.5, 0.22, 0.85); // Back mane
+                        shape.lineTo(0.12, 1.15);                      // Ear
+                        shape.lineTo(0.02, 0.95);                      // Poll
+                        shape.quadraticCurveTo(-0.25, 0.8, -0.22, 0.55); // Snout
+                        shape.quadraticCurveTo(-0.1, 0.45, 0, 0.3);    // Jaw
+
+                        const extrudeSettings = { depth: 0.24, bevelEnabled: true, bevelSegments: 3, steps: 1, bevelSize: 0.03, bevelThickness: 0.03 };
+                        const headGeom = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+                        headGeom.center();
+                        headGeom.translate(0, 0.72, 0);
+                        group.add(new THREE.Mesh(headGeom));
+                        return group;
+                    }
+
+                    case 'b': { // Bishop (Mitre & Slit)
+                        const points = [
+                            new THREE.Vector2(0, 0),
+                            new THREE.Vector2(0.36, 0),
+                            new THREE.Vector2(0.36, 0.08),
+                            new THREE.Vector2(0.28, 0.14),
+                            new THREE.Vector2(0.18, 0.55),
+                            new THREE.Vector2(0.24, 0.62),
+                            new THREE.Vector2(0.16, 0.72),
+                            new THREE.Vector2(0.26, 0.95),
+                            new THREE.Vector2(0.18, 1.20),
+                            new THREE.Vector2(0.08, 1.30),
+                            new THREE.Vector2(0, 1.30)
+                        ];
+                        const baseLathe = new THREE.LatheGeometry(points, 24);
+                        const topSphere = new THREE.SphereGeometry(0.08, 16, 16);
+                        topSphere.translate(0, 1.36, 0);
+
+                        const group = new THREE.Group();
+                        group.add(new THREE.Mesh(baseLathe), new THREE.Mesh(topSphere));
+                        return group;
+                    }
+
+                    case 'q': { // Queen (Flared crown with beads)
+                        const points = [
+                            new THREE.Vector2(0, 0),
+                            new THREE.Vector2(0.40, 0),
+                            new THREE.Vector2(0.40, 0.08),
+                            new THREE.Vector2(0.32, 0.14),
+                            new THREE.Vector2(0.20, 0.60),
+                            new THREE.Vector2(0.26, 0.70),
+                            new THREE.Vector2(0.18, 0.85),
+                            new THREE.Vector2(0.30, 1.30),
+                            new THREE.Vector2(0.34, 1.45),
+                            new THREE.Vector2(0.20, 1.45),
+                            new THREE.Vector2(0, 1.40)
+                        ];
+                        const baseLathe = new THREE.LatheGeometry(points, 24);
+                        const topOrb = new THREE.SphereGeometry(0.10, 16, 16);
+                        topOrb.translate(0, 1.55, 0);
+
+                        const group = new THREE.Group();
+                        group.add(new THREE.Mesh(baseLathe), new THREE.Mesh(topOrb));
+
+                        // Crown Beads
+                        for (let i = 0; i < 8; i++) {
+                            const bead = new THREE.SphereGeometry(0.04, 8, 8);
+                            const angle = (i * Math.PI) / 4;
+                            bead.translate(0.32 * Math.cos(angle), 1.47, 0.32 * Math.sin(angle));
+                            group.add(new THREE.Mesh(bead));
+                        }
+                        return group;
+                    }
+
+                    case 'k': { // King (Cross finial)
+                        const points = [
+                            new THREE.Vector2(0, 0),
+                            new THREE.Vector2(0.42, 0),
+                            new THREE.Vector2(0.42, 0.08),
+                            new THREE.Vector2(0.34, 0.14),
+                            new THREE.Vector2(0.22, 0.65),
+                            new THREE.Vector2(0.28, 0.75),
+                            new THREE.Vector2(0.20, 0.90),
+                            new THREE.Vector2(0.32, 1.40),
+                            new THREE.Vector2(0.36, 1.55),
+                            new THREE.Vector2(0.22, 1.55),
+                            new THREE.Vector2(0, 1.50)
+                        ];
+                        const baseLathe = new THREE.LatheGeometry(points, 24);
+                        const group = new THREE.Group();
+                        group.add(new THREE.Mesh(baseLathe));
+
+                        // 3D Cross Finial on Top
+                        const vBar = new THREE.BoxGeometry(0.06, 0.28, 0.06);
+                        vBar.translate(0, 1.68, 0);
+                        const hBar = new THREE.BoxGeometry(0.20, 0.06, 0.06);
+                        hBar.translate(0, 1.72, 0);
+
+                        group.add(new THREE.Mesh(vBar), new THREE.Mesh(hBar));
+                        return group;
+                    }
+                }
+            }
+
+            // Merge group meshes into single smooth geometry mesh for performance
+            buildPieceMesh(type, color) {
+                const group = this.createPieceGeometry(type);
+                const mat = color === 'w' ? this.materials.whitePiece : this.materials.blackPiece;
+
+                // Traverse group & apply shadows/materials
+                group.traverse(child => {
+                    if (child.isMesh) {
+                        child.material = mat;
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                    }
+                });
+
+                // Orient Black pieces facing White and vice-versa
+                if (color === 'b') {
+                    group.rotation.y = Math.PI;
+                }
+
+                return group;
+            }
+
+            // Synchronize 3D Board Meshes with Pure JS Engine State
+            syncBoardWithEngine(engine) {
+                // Clear existing piece meshes
+                this.pieceMeshes.forEach(mesh => this.scene.remove(mesh));
+                this.pieceMeshes.clear();
+
+                for (let i = 0; i < 64; i++) {
+                    const piece = engine.board[i];
+                    if (piece) {
+                        const x = i % 8;
+                        const y = Math.floor(i / 8);
+                        const pieceMesh = this.buildPieceMesh(piece.type, piece.color);
+                        
+                        const worldX = x - 3.5;
+                        const worldZ = 3.5 - y;
+                        pieceMesh.position.set(worldX, 0, worldZ);
+                        pieceMesh.userData = { squareIdx: i, type: piece.type, color: piece.color };
+
+                        this.scene.add(pieceMesh);
+                        this.pieceMeshes.set(i, pieceMesh);
+                    }
+                }
+            }
+
+            // Animated Smooth Piece Movement along Quadratic Arc
+            animateMove(fromIdx, toIdx, onComplete) {
+                const pieceMesh = this.pieceMeshes.get(fromIdx);
+                if (!pieceMesh) {
+                    if (onComplete) onComplete();
+                    return;
+                }
+
+                const toX = (toIdx % 8) - 3.5;
+                const toZ = 3.5 - Math.floor(toIdx / 8);
+                const startPos = pieceMesh.position.clone();
+                const targetPos = new THREE.Vector3(toX, 0, toZ);
+
+                const duration = 320; // ms
+                const startTime = performance.now();
+
+                const animateStep = (now) => {
+                    const elapsed = now - startTime;
+                    const progress = Math.min(elapsed / duration, 1.0);
+                    // Ease in-out quadratic
+                    const ease = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+
+                    pieceMesh.position.lerpVectors(startPos, targetPos, ease);
+                    // Parabolic arc lift
+                    pieceMesh.position.y = Math.sin(progress * Math.PI) * 0.8;
+
+                    if (progress < 1.0) {
+                        requestAnimationFrame(animateStep);
+                    } else {
+                        pieceMesh.position.y = 0;
+                        this.pieceMeshes.delete(fromIdx);
+                        this.pieceMeshes.set(toIdx, pieceMesh);
+                        if (onComplete) onComplete();
+                    }
+                };
+
+                requestAnimationFrame(animateStep);
+            }
+
+            // Display Highlights: Selected piece, legal move dots, capture rings
+            showHighlights(selectedIdx, legalMoves = []) {
+                this.clearHighlights();
+
+                // 1. Selection Ring
+                if (selectedIdx !== null) {
+                    const sx = (selectedIdx % 8) - 3.5;
+                    const sy = 3.5 - Math.floor(selectedIdx / 8);
+                    const ringGeom = new THREE.RingGeometry(0.35, 0.46, 32);
+                    ringGeom.rotateX(-Math.PI / 2);
+                    const ring = new THREE.Mesh(ringGeom, this.materials.selectRing);
+                    ring.position.set(sx, 0.02, sy);
+                    this.scene.add(ring);
+                    this.highlightMeshes.push(ring);
+                }
+
+                // 2. Target Indicators (Green dots for empty moves, Red rings for captures)
+                legalMoves.forEach(m => {
+                    const tx = m.to.x - 3.5;
+                    const ty = 3.5 - m.to.y;
+
+                    if (m.captured) {
+                        const capGeom = new THREE.RingGeometry(0.32, 0.45, 32);
+                        capGeom.rotateX(-Math.PI / 2);
+                        const capRing = new THREE.Mesh(capGeom, this.materials.captureRing);
+                        capRing.position.set(tx, 0.02, ty);
+                        this.scene.add(capRing);
+                        this.highlightMeshes.push(capRing);
+                    } else {
+                        const dotGeom = new THREE.CircleGeometry(0.14, 24);
+                        dotGeom.rotateX(-Math.PI / 2);
+                        const dot = new THREE.Mesh(dotGeom, this.materials.legalMoveDot);
+                        dot.position.set(tx, 0.02, ty);
+                        this.scene.add(dot);
+                        this.highlightMeshes.push(dot);
+                    }
+                });
+            }
+
+            setLastMoveHighlight(fromIdx, toIdx) {
+                this.lastMoveHighlights.forEach(m => this.scene.remove(m));
+                this.lastMoveHighlights = [];
+
+                [fromIdx, toIdx].forEach(idx => {
+                    if (idx !== null && idx !== undefined) {
+                        const x = (idx % 8) - 3.5;
+                        const z = 3.5 - Math.floor(idx / 8);
+                        const tileGeom = new THREE.PlaneGeometry(0.96, 0.96);
+                        tileGeom.rotateX(-Math.PI / 2);
+                        const tile = new THREE.Mesh(tileGeom, this.materials.lastMoveTile);
+                        tile.position.set(x, 0.01, z);
+                        this.scene.add(tile);
+                        this.lastMoveHighlights.push(tile);
+                    }
+                });
+            }
+
+            setCheckHighlight(kingIdx) {
+                if (this.checkHighlightMesh) {
+                    this.scene.remove(this.checkHighlightMesh);
+                    this.checkHighlightMesh = null;
+                }
+                if (kingIdx !== null) {
+                    const x = (kingIdx % 8) - 3.5;
+                    const z = 3.5 - Math.floor(kingIdx / 8);
+                    const tileGeom = new THREE.PlaneGeometry(0.98, 0.98);
+                    tileGeom.rotateX(-Math.PI / 2);
+                    this.checkHighlightMesh = new THREE.Mesh(tileGeom, this.materials.checkTile);
+                    this.checkHighlightMesh.position.set(x, 0.015, z);
+                    this.scene.add(this.checkHighlightMesh);
+                }
+            }
+
+            clearHighlights() {
+                this.highlightMeshes.forEach(m => this.scene.remove(m));
+                this.highlightMeshes = [];
+            }
+
+            // Raycasting Setup for Mouse Hover & Click Detection
+            setupRaycaster() {
+                this.raycaster = new THREE.Raycaster();
+                this.mouse = new THREE.Vector2();
+            }
+
+            getSquareFromMouse(event) {
+                this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+                this.raycaster.setFromCamera(this.mouse, this.camera);
+                const intersects = this.raycaster.intersectObjects(this.squareMeshes);
+
+                if (intersects.length > 0) {
+                    return intersects[0].object.userData.squareIdx;
+                }
+                return null;
+            }
+
+            // Smooth Camera Preset Transitions
+            setCameraPreset(preset) {
+                let targetPos = new THREE.Vector3();
+                if (preset === 'white') targetPos.set(0, 8.5, 8.5);
+                else if (preset === 'black') targetPos.set(0, 8.5, -8.5);
+                else if (preset === 'top') targetPos.set(0, 11, 0.01);
+
+                const startPos = this.camera.position.clone();
+                const duration = 600;
+                const startTime = performance.now();
+
+                const anim = (now) => {
+                    const elapsed = now - startTime;
+                    const progress = Math.min(elapsed / duration, 1);
+                    const ease = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+
+                    this.camera.position.lerpVectors(startPos, targetPos, ease);
+                    this.controls.update();
+
+                    if (progress < 1) requestAnimationFrame(anim);
+                };
+                requestAnimationFrame(anim);
+            }
+
+            onWindowResize() {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                this.controls.update();
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+
+        /**
+         * ====================================================================
+         * 3. WEB AUDIO PROCEDURAL SOUND SYNTHESIZER
+         * ====================================================================
+         */
+        class SoundFX {
+            constructor() {
+                this.enabled = true;
+                this.ctx = null;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            }
+
+            playMove() {
+                if (!this.enabled) return;
+                this.init();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(220, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(110, this.ctx.currentTime + 0.08);
+
+                gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.08);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.08);
+            }
+
+            playCapture() {
+                if (!this.enabled) return;
+                this.init();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(150, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(40, this.ctx.currentTime + 0.12);
+
+                gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.12);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.12);
+            }
+
+            playCheck() {
+                if (!this.enabled) return;
+                this.init();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(587.33, this.ctx.currentTime); // D5
+                osc.frequency.setValueAtTime(880, this.ctx.currentTime + 0.1); // A5
+
+                gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.3);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.3);
+            }
+
+            playWin() {
+                if (!this.enabled) return;
+                this.init();
+                [523.25, 659.25, 783.99, 1046.50].forEach((freq, idx) => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.frequency.value = freq;
+                    gain.gain.setValueAtTime(0.2, this.ctx.currentTime + idx * 0.08);
+                    gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + idx * 0.08 + 0.4);
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start(this.ctx.currentTime + idx * 0.08);
+                    osc.stop(this.ctx.currentTime + idx * 0.08 + 0.4);
+                });
+            }
+        }
+
+        /**
+         * ====================================================================
+         * 4. MAIN APP CONTROLLER & UI BINDINGS
+         * ====================================================================
+         */
+        class AppController {
+            constructor() {
+                this.engine = new ChessEngine();
+                this.chess3D = new Chess3D(document.getElementById('canvas-container'));
+                this.sound = new SoundFX();
+
+                // Game Configurations
+                this.mode = 'pve';          // 'pve' or 'pvp'
+                this.playerSide = 'w';       // 'w' or 'b'
+                this.aiDifficulty = 1;       // 1: Casual, 2: Intermediate, 3: Master
+                this.selectedSquare = null;
+                this.activeLegalMoves = [];
+                this.pendingPromotionMove = null;
+                this.isAIThinking = false;
+
+                this.initUI();
+                this.newGame();
+            }
+
+            initUI() {
+                // Mode Toggle
+                document.getElementById('mode-pve').addEventListener('click', () => this.setMode('pve'));
+                document.getElementById('mode-pvp').addEventListener('click', () => this.setMode('pvp'));
+
+                // Player Side Toggle
+                document.getElementById('btn-side-white').addEventListener('click', () => this.setPlayerSide('w'));
+                document.getElementById('btn-side-black').addEventListener('click', () => this.setPlayerSide('b'));
+
+                // AI Difficulty Level
+                document.querySelectorAll('#ai-difficulty-group button').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        this.aiDifficulty = parseInt(e.target.dataset.level);
+                        document.querySelectorAll('#ai-difficulty-group button').forEach(b => {
+                            b.className = 'px-2 py-1 rounded text-[11px] font-medium glass-button text-slate-300';
+                        });
+                        e.target.className = 'px-2 py-1 rounded text-[11px] font-medium glass-button bg-amber-500/20 text-amber-300 border-amber-500/40';
+                    });
+                });
+
+                // Themes
+                document.querySelectorAll('.theme-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const target = e.currentTarget;
+                        const themeKey = target.dataset.theme;
+                        this.chess3D.setTheme(themeKey);
+                        document.querySelectorAll('.theme-btn').forEach(b => b.className = 'theme-btn glass-button p-2 rounded-lg flex flex-col items-center gap-1 text-slate-400');
+                        target.className = 'theme-btn glass-button p-2 rounded-lg flex flex-col items-center gap-1 border-amber-500/50 bg-amber-500/10';
+                    });
+                });
+
+                // Camera Presets
+                document.getElementById('cam-white').addEventListener('click', () => this.chess3D.setCameraPreset('white'));
+                document.getElementById('cam-black').addEventListener('click', () => this.chess3D.setCameraPreset('black'));
+                document.getElementById('cam-top').addEventListener('click', () => this.chess3D.setCameraPreset('top'));
+
+                // Actions
+                document.getElementById('btn-new-game').addEventListener('click', () => this.newGame());
+                document.getElementById('btn-undo').addEventListener('click', () => this.undo());
+                document.getElementById('btn-hint').addEventListener('click', () => this.showHint());
+                document.getElementById('btn-restart-gameover').addEventListener('click', () => {
+                    document.getElementById('modal-gameover').classList.add('hidden');
+                    this.newGame();
+                });
+
+                // Sound Toggle
+                document.getElementById('btn-sound').addEventListener('click', (e) => {
+                    this.sound.enabled = !this.sound.enabled;
+                    const icon = e.currentTarget.querySelector('i');
+                    icon.className = this.sound.enabled ? 'fa-solid fa-volume-high text-base' : 'fa-solid fa-volume-xmark text-base text-rose-400';
+                });
+
+                // Mobile Panel Toggle
+                document.getElementById('btn-toggle-panel').addEventListener('click', () => {
+                    document.getElementById('side-panel').classList.toggle('hidden');
+                });
+
+                // Pawn Promotion Modal Selection
+                document.querySelectorAll('#promotion-options button').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const promoType = e.currentTarget.dataset.piece;
+                        document.getElementById('modal-promotion').classList.add('hidden');
+                        if (this.pendingPromotionMove) {
+                            this.pendingPromotionMove.promotion = promoType;
+                            this.executePlayerMove(this.pendingPromotionMove);
+                            this.pendingPromotionMove = null;
+                        }
+                    });
+                });
+
+                // 3D Canvas Click Event
+                window.addEventListener('pointerdown', (e) => {
+                    // Ignore clicks on UI elements
+                    if (e.target.closest('#side-panel') || e.target.closest('header') || e.target.closest('.fixed')) return;
+                    this.onBoardClick(e);
+                });
+            }
+
+            setMode(mode) {
+                this.mode = mode;
+                document.getElementById('mode-pve').className = mode === 'pve' ?
+                    'glass-button py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 border-amber-500/50 bg-amber-500/20 text-amber-200' :
+                    'glass-button py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 text-slate-300';
+                document.getElementById('mode-pvp').className = mode === 'pvp' ?
+                    'glass-button py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 border-amber-500/50 bg-amber-500/20 text-amber-200' :
+                    'glass-button py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 text-slate-300';
+
+                document.getElementById('ai-settings').style.display = mode === 'pve' ? 'block' : 'none';
+                document.getElementById('mode-desc').innerText = mode === 'pve' ? `人机对战 (${this.playerSide === 'w' ? '白棋' : '黑棋'})` : '双人同屏';
+                this.newGame();
+            }
+
+            setPlayerSide(side) {
+                this.playerSide = side;
+                document.getElementById('btn-side-white').className = side === 'w' ? 'px-2.5 py-1 rounded text-[11px] font-medium glass-button bg-amber-500/20 text-amber-300 border-amber-500/40' : 'px-2.5 py-1 rounded text-[11px] font-medium glass-button text-slate-300';
+                document.getElementById('btn-side-black').className = side === 'b' ? 'px-2.5 py-1 rounded text-[11px] font-medium glass-button bg-amber-500/20 text-amber-300 border-amber-500/40' : 'px-2.5 py-1 rounded text-[11px] font-medium glass-button text-slate-300';
+                document.getElementById('mode-desc').innerText = `人机对战 (${side === 'w' ? '白棋' : '黑棋'})`;
+                this.chess3D.setCameraPreset(side === 'w' ? 'white' : 'black');
+                this.newGame();
+            }
+
+            newGame() {
+                this.engine.reset();
+                this.selectedSquare = null;
+                this.activeLegalMoves = [];
+                this.isAIThinking = false;
+                this.chess3D.syncBoardWithEngine(this.engine);
+                this.chess3D.clearHighlights();
+                this.chess3D.setLastMoveHighlight(null, null);
+                this.chess3D.setCheckHighlight(null);
+                this.updateUI();
+
+                // If playing as Black against AI, trigger initial AI move
+                if (this.mode === 'pve' && this.playerSide === 'b') {
+                    this.triggerAIMove();
+                }
+            }
+
+            onBoardClick(event) {
+                if (this.isAIThinking) return;
+                // If in PvE and not player's turn, ignore
+                if (this.mode === 'pve' && this.engine.turn !== this.playerSide) return;
+
+                const clickedIdx = this.chess3D.getSquareFromMouse(event);
+                if (clickedIdx === null) {
+                    this.clearSelection();
+                    return;
+                }
+
+                const clickedX = clickedIdx % 8;
+                const clickedY = Math.floor(clickedIdx / 8);
+                const clickedPiece = this.engine.getPiece(clickedX, clickedY);
+
+                // If clicking one of the highlighted target moves
+                const targetMove = this.activeLegalMoves.find(m => m.to.x === clickedX && m.to.y === clickedY);
+                if (targetMove) {
+                    // Check if Promotion is required
+                    if (targetMove.piece.type === 'p' && (targetMove.to.y === 0 || targetMove.to.y === 7)) {
+                        this.pendingPromotionMove = targetMove;
+                        document.getElementById('modal-promotion').classList.remove('hidden');
+                        return;
+                    }
+                    this.executePlayerMove(targetMove);
+                    return;
+                }
+
+                // Selecting a piece of the current turn color
+                if (clickedPiece && clickedPiece.color === this.engine.turn) {
+                    this.selectedSquare = clickedIdx;
+                    this.activeLegalMoves = this.engine.getLegalMoves(clickedX, clickedY);
+                    this.chess3D.showHighlights(this.selectedSquare, this.activeLegalMoves);
+                } else {
+                    this.clearSelection();
+                }
+            }
+
+            clearSelection() {
+                this.selectedSquare = null;
+                this.activeLegalMoves = [];
+                this.chess3D.clearHighlights();
+            }
+
+            executePlayerMove(move) {
+                const fromIdx = move.from.x + move.from.y * 8;
+                const toIdx = move.to.x + move.to.y * 8;
+                this.clearSelection();
+
+                this.chess3D.animateMove(fromIdx, toIdx, () => {
+                    const result = this.engine.makeMove(move);
+                    this.chess3D.syncBoardWithEngine(this.engine);
+                    this.chess3D.setLastMoveHighlight(fromIdx, toIdx);
+
+                    if (move.captured) this.sound.playCapture();
+                    else this.sound.playMove();
+
+                    this.postMoveCheck(result);
+
+                    // Trigger AI response if PvE
+                    if (result.gameState === 'active' && this.mode === 'pve' && this.engine.turn !== this.playerSide) {
+                        this.triggerAIMove();
+                    }
+                });
+            }
+
+            triggerAIMove() {
+                this.isAIThinking = true;
+                document.getElementById('ai-thinking').classList.remove('hidden');
+
+                setTimeout(() => {
+                    const bestMove = this.engine.getBestMoveAI(this.aiDifficulty);
+                    document.getElementById('ai-thinking').classList.add('hidden');
+                    this.isAIThinking = false;
+
+                    if (bestMove) {
+                        const fromIdx = bestMove.from.x + bestMove.from.y * 8;
+                        const toIdx = bestMove.to.x + bestMove.to.y * 8;
+
+                        // Auto-promote AI pawn to Queen
+                        if (bestMove.piece.type === 'p' && (bestMove.to.y === 0 || bestMove.to.y === 7)) {
+                            bestMove.promotion = 'q';
+                        }
+
+                        this.chess3D.animateMove(fromIdx, toIdx, () => {
+                            const result = this.engine.makeMove(bestMove);
+                            this.chess3D.syncBoardWithEngine(this.engine);
+                            this.chess3D.setLastMoveHighlight(fromIdx, toIdx);
+
+                            if (bestMove.captured) this.sound.playCapture();
+                            else this.sound.playMove();
+
+                            this.postMoveCheck(result);
+                        });
+                    }
+                }, 300);
+            }
+
+            postMoveCheck(result) {
+                const currentTurn = this.engine.turn;
+                const inCheck = this.engine.isInCheck(currentTurn);
+
+                if (inCheck) {
+                    const kingPos = this.engine.findKing(currentTurn);
+                    if (kingPos) this.chess3D.setCheckHighlight(kingPos.x + kingPos.y * 8);
+                    this.sound.playCheck();
+                } else {
+                    this.chess3D.setCheckHighlight(null);
+                }
+
+                this.updateUI();
+
+                if (result.gameState !== 'active') {
+                    this.handleEndgame(result.gameState);
+                }
+            }
+
+            handleEndgame(state) {
+                const modal = document.getElementById('modal-gameover');
+                const title = document.getElementById('gameover-title');
+                const reason = document.getElementById('gameover-reason');
+                const icon = document.getElementById('gameover-icon');
+
+                modal.classList.remove('hidden');
+
+                if (state === 'checkmate') {
+                    const winner = this.engine.turn === 'w' ? '黑方' : '白方';
+                    title.innerText = `${winner} 胜利！`;
+                    reason.innerText = `将死！${this.engine.turn === 'w' ? '白方' : '黑方'}已无路可走。`;
+                    icon.className = 'fa-solid fa-trophy';
+                    this.sound.playWin();
+                } else {
+                    title.innerText = '和局 (Draw)';
+                    icon.className = 'fa-solid fa-handshake';
+                    if (state === 'stalemate') reason.innerText = '逼和！无合法走法且未处于被将军状态。';
+                    else if (state === 'insufficient') reason.innerText = '子力不足，无法达成将死。';
+                    else if (state === '50move') reason.innerText = '触发 50 回合未吃子/未动兵和棋规则。';
+                    else if (state === 'threefold') reason.innerText = '触发三次重复局面和棋规则。';
+                }
+            }
+
+            undo() {
+                if (this.isAIThinking) return;
+                // In PvE, undo 2 steps (player + AI)
+                const undoSteps = (this.mode === 'pve' && this.engine.moveHistory.length >= 2) ? 2 : 1;
+                for (let i = 0; i < undoSteps; i++) {
+                    this.engine.undoMove();
+                }
+                this.chess3D.syncBoardWithEngine(this.engine);
+                this.chess3D.clearHighlights();
+
+                const lastMove = this.engine.moveHistory[this.engine.moveHistory.length - 1];
+                if (lastMove) {
+                    this.chess3D.setLastMoveHighlight(lastMove.from.x + lastMove.from.y * 8, lastMove.to.x + lastMove.to.y * 8);
+                } else {
+                    this.chess3D.setLastMoveHighlight(null, null);
+                }
+
+                this.chess3D.setCheckHighlight(null);
+                this.updateUI();
+            }
+
+            showHint() {
+                if (this.isAIThinking) return;
+                const bestMove = this.engine.getBestMoveAI(2);
+                if (bestMove) {
+                    const fromIdx = bestMove.from.x + bestMove.from.y * 8;
+                    this.selectedSquare = fromIdx;
+                    this.activeLegalMoves = [bestMove];
+                    this.chess3D.showHighlights(fromIdx, [bestMove]);
+                }
+            }
+
+            updateUI() {
+                // Status Badge Update
+                const turnDot = document.getElementById('turn-dot');
+                const statusText = document.getElementById('status-text');
+                const turnStr = this.engine.turn === 'w' ? '白方' : '黑方';
+                const inCheck = this.engine.isInCheck(this.engine.turn);
+
+                turnDot.className = this.engine.turn === 'w' ?
+                    'w-3.5 h-3.5 rounded-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]' :
+                    'w-3.5 h-3.5 rounded-full bg-slate-900 border border-slate-600 shadow-[0_0_10px_rgba(0,0,0,0.8)]';
+
+                if (inCheck) {
+                    statusText.innerText = `${turnStr}回合 (将军！)`;
+                    statusText.className = 'text-sm font-bold tracking-wide text-amber-400 animate-pulse';
+                } else {
+                    statusText.innerText = `${turnStr}回合`;
+                    statusText.className = 'text-sm font-semibold tracking-wide text-slate-200';
+                }
+
+                // Captured Pieces & Material Score Update
+                const { capturedByWhite, capturedByBlack, scoreDiff } = this.engine.getCapturedPieces();
+                const iconMap = { p: 'fa-chess-pawn', n: 'fa-chess-knight', b: 'fa-chess-bishop', r: 'fa-chess-rook', q: 'fa-chess-queen' };
+
+                const whiteCapturedEl = document.getElementById('captured-white-pieces');
+                const blackCapturedEl = document.getElementById('captured-black-pieces');
+
+                whiteCapturedEl.innerHTML = capturedByBlack.map(p => `<i class="fa-solid ${iconMap[p]} text-white text-xs"></i>`).join('');
+                blackCapturedEl.innerHTML = capturedByWhite.map(p => `<i class="fa-solid ${iconMap[p]} text-slate-900 text-xs"></i>`).join('');
+
+                const advEl = document.getElementById('material-advantage');
+                if (scoreDiff > 0) {
+                    advEl.innerText = `白方 +${scoreDiff}`;
+                    advEl.className = 'font-mono font-bold text-emerald-400';
+                } else if (scoreDiff < 0) {
+                    advEl.innerText = `黑方 +${Math.abs(scoreDiff)}`;
+                    advEl.className = 'font-mono font-bold text-amber-400';
+                } else {
+                    advEl.innerText = '平手 (+0)';
+                    advEl.className = 'font-mono font-bold text-slate-400';
+                }
+
+                // Move History SAN Table Update
+                const historyList = document.getElementById('move-history-list');
+                const history = this.engine.moveHistory;
+
+                if (history.length === 0) {
+                    historyList.innerHTML = '<div class="text-slate-500 text-center py-4">暂无走法记录</div>';
+                    return;
+                }
+
+                let html = '';
+                for (let i = 0; i < history.length; i += 2) {
+                    const moveNum = Math.floor(i / 2) + 1;
+                    const whiteMove = history[i] ? history[i].san : '';
+                    const blackMove = history[i + 1] ? history[i + 1].san : '';
+
+                    html += `
+                        <div class="grid grid-cols-5 gap-1 py-1 px-2 rounded hover:bg-slate-800/50">
+                            <span class="text-slate-500 col-span-1">${moveNum}.</span>
+                            <span class="text-slate-200 font-semibold col-span-2">${whiteMove}</span>
+                            <span class="text-slate-400 col-span-2">${blackMove}</span>
+                        </div>
+                    `;
+                }
+                historyList.innerHTML = html;
+                historyList.scrollTop = historyList.scrollHeight;
+            }
+        }
+
+        // Initialize App on Page Load
+        window.onload = () => {
+            window.app = new AppController();
+        };
+    </script>
+</body>
+</html>
