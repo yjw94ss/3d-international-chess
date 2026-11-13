@@ -968,6 +968,11 @@
             constructor(containerEl) {
                 this.container = containerEl;
                 this.pieceMeshes = new Map(); // Key: squareIndex, Value: Mesh
+                // Authoritative registry of EVERY piece mesh currently in the scene.
+                // pieceMeshes is keyed by square, so a capture overwrites the destination
+                // key and orphans the captured mesh — that orphan can then never be
+                // removed, which is what caused captured pieces to overlap the capturer.
+                this.allPieceMeshes = new Set();
                 this.highlightMeshes = [];
                 this.lastMoveHighlights = [];
                 this.checkHighlightMesh = null;
@@ -1348,8 +1353,17 @@
 
             // Synchronize 3D Board Meshes with Pure JS Engine State
             syncBoardWithEngine(engine) {
-                // Clear existing piece meshes
-                this.pieceMeshes.forEach(mesh => this.scene.remove(mesh));
+                // Clear existing piece meshes.
+                // Must iterate the authoritative Set, NOT pieceMeshes: on a capture the
+                // destination key is overwritten, leaving the captured mesh unreachable
+                // via the Map but still parented to the scene.
+                this.allPieceMeshes.forEach(mesh => {
+                    this.scene.remove(mesh);
+                    mesh.traverse(child => {
+                        if (child.isMesh && child.geometry) child.geometry.dispose();
+                    });
+                });
+                this.allPieceMeshes.clear();
                 this.pieceMeshes.clear();
 
                 for (let i = 0; i < 64; i++) {
@@ -1366,8 +1380,30 @@
 
                         this.scene.add(pieceMesh);
                         this.pieceMeshes.set(i, pieceMesh);
+                        this.allPieceMeshes.add(pieceMesh);
                     }
                 }
+            }
+
+            // Detach a single piece mesh from the scene and from BOTH registries.
+            // Removal is immediate on purpose: syncBoardWithEngine() rebuilds the whole
+            // board right after the move, so any lingering fade-out would briefly overlap
+            // the newly created piece on the same square.
+            removePieceMesh(mesh) {
+                if (!mesh) return;
+
+                // Drop any square->mesh mapping that still points at this mesh
+                const staleKeys = [];
+                this.pieceMeshes.forEach((m, idx) => {
+                    if (m === mesh) staleKeys.push(idx);
+                });
+                staleKeys.forEach(idx => this.pieceMeshes.delete(idx));
+
+                this.allPieceMeshes.delete(mesh);
+                this.scene.remove(mesh);
+                mesh.traverse(child => {
+                    if (child.isMesh && child.geometry) child.geometry.dispose();
+                });
             }
 
             // Animated Smooth Piece Movement along Quadratic Arc
@@ -1377,6 +1413,11 @@
                     if (onComplete) onComplete();
                     return;
                 }
+
+                // Capture case: the destination square is occupied. Keep a handle on the
+                // victim so it can be properly unregistered on landing, instead of being
+                // silently dropped from the Map and left floating in the scene.
+                const capturedMesh = (toIdx !== fromIdx) ? this.pieceMeshes.get(toIdx) : null;
 
                 const toX = (toIdx % 8) - 3.5;
                 const toZ = 3.5 - Math.floor(toIdx / 8);
@@ -1401,7 +1442,9 @@
                     } else {
                         pieceMesh.position.y = 0;
                         this.pieceMeshes.delete(fromIdx);
+                        if (capturedMesh && capturedMesh !== pieceMesh) this.removePieceMesh(capturedMesh);
                         this.pieceMeshes.set(toIdx, pieceMesh);
+                        this.allPieceMeshes.add(pieceMesh);
                         if (onComplete) onComplete();
                     }
                 };
